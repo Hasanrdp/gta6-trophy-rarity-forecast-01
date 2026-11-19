@@ -1,60 +1,53 @@
-# GTA VI Trophy Rarity Forecaster
+# GTA 6 Trophy Rarity Forecast — v2
 
-[![make.fun](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
+[![Competition](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
 [![Rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Hasanrdp/gta6-trophy-rarity-forecast-01/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
 [![Reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Hasanrdp/gta6-trophy-rarity-forecast-01/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
 
-Forecasts, for every GTA VI trophy on PlayStation 5, its earn rate on Exophase at the case's target, as five quantiles (0.05, 0.25, 0.5, 0.75, 0.95). Built for the [make.fun gta6-trophy-rarity-forecast-01 bounty](https://make.fun/bounty/gta6-trophy-rarity-forecast-01). Python 3.13, standard library only, no network, deterministic (two runs byte-identical).
+Entry for the [gta6-trophy-rarity-forecast-01 bounty](https://make.fun/bounty/gta6-trophy-rarity-forecast-01): forecast how many GTA VI players earn each trophy in week one. `main.py` (Python 3.13, standard library only, no network, deterministic) reads every `<id>.in` in the input directory and writes `<id>.out` — five quantiles (0.05, 0.25, 0.5, 0.75, 0.95) of each trophy's earn rate at the case's target, scored by mean pinball loss on the logit scale.
 
-## The problem, in one ratio
+## Why this is hard, and what the entry does about it
 
-An earn rate is a ratio, `r = E / N`: the tracked players who earned the trophy (E) over the players Exophase tracks (N). Exophase refreshes its page on its own slow clock, so the recorded history is a step function: long flat stretches, then a jump. At a refresh N usually jumps a lot while E barely moves, so every rate falls by roughly `ln(N_new / N_old)` in logit terms. Launch night proved it: the page sat unchanged from 23:48Z to 04:00Z at 638 players, refreshed at 04:30Z to 3,868 players (x6.06), and every rate except the 100% one fell, by about 1.7 logits on average, while earner counts barely moved (most 4-8 -> 4-9).
+An earn rate is a ratio, r = E / N: earners over players tracked. Exophase refreshes its trophy page on its own slow clock, so a recorded history is a step function: long flat stretches, then a jump. At a refresh N usually jumps while E barely moves, so every rate falls. Launch night proved it (kit RULES.txt): the page sat unchanged from 23:48Z to 04:00Z at 638 players, refreshed by 04:30Z to 3,868 players (×6.06, ln 1.802), and every rate but the 100% one fell. A live snapshot of the same page, fetched 2026-11-19T13:36Z during this build, shows the same force at ten times the scale: most rates fell 2.5–3.2 logits from launch night (mean 2.61) while the two earliest trophies (first fishing, Chapter 1) barely moved — new players earn the first trophies immediately, the rest only later.
 
-Over the final's 4.5-day horizon the two forces reverse: N growth slows as the launch surge passes, while E growth accelerates as players work through the story. Early trophies' rates recover; late trophies' keep falling. A forecaster that only extrapolates the rate misses the saturation; one that only models E/N misses how slowly earners arrive.
+The entry therefore works in two regimes, chosen by how much the history actually shows:
 
-## Method
+- **Flat history (at most 2 distinct reads — the practice cases, and any case whose page never refreshed):** no trend can be fitted, so the median stays at the last rate and the forecast is a refresh mixture. With probability p = 1 − exp(−H / τ) a refresh lands before the target (H = horizon hours, τ = the refresh interval, 4.7 h from launch night when the history shows none); if it lands, the rate drops by D = jump × √(max(1, H / τ)) logits, where jump is the median log N-jump between distinct reads (1.802, the launch-night jump, when the history shows none). Quantiles come from the mixture by bisection on its CDF. This is the honest shape for a stale page: the median drops only as far as a refresh is likely, the lower tail reaches toward the post-refresh level, the upper tail stays near the last rate.
+- **Rich history (3+ distinct reads — the final case):** three trend members, each fitted on the distinct reads, are averaged on the logit scale with equal weights, and the spread combines their residual scales with their disagreement: (a) a logit-linear trend in ln(1 + hours since release) over the last 24 h (the house curve baseline's own shape, slope uncapped); (b) a saturating logistic in ln(1 + hours), asymptote on a coarse grid (5, 10, 20, 35, 50, 70, 90, 99.99) — a rate cannot rise on a log-time line forever; (c) an E/N decomposition — log-linear earners and log-linear players tracked in ln(1 + hours), rate = E / N at the target — the member that understands dilution. Persistence is only the fallback when no trend member can fit. No refresh mixture is added on top: the trends already model the movement, and the spread (member disagreement + residuals + a 0.5·√days horizon term) covers the refresh timing.
 
-The forecast is the equal-weight mean, on the logit scale, of four members with deliberately opposing biases, so their errors partly cancel:
+## Validation — real data only
 
-1. **Saturating logistic in log-time**, `r = L / (1 + exp(-(a + b ln(1+t))))`, fitted on the last 24 hours of distinct reads, asymptote `L` on a coarse grid (5, 10, 20, 35, 50, 70, 90, 99.99). The asymptote is the point: a rate cannot keep rising on a log-time line forever, and the house curve baseline has no asymptote and overshoots. The coarse grid regularises -- a fine grid fits noise and does worse.
-2. **The same saturating logistic on the last 12 hours with a fine grid**: a second opinion on the recent slope and asymptote.
-3. **A point-lag earners-over-players model**, `E(t) = s * N(t - tau)`, with the share `s` capped at 1 and `N` from a power-law / saturating average. It is the member that understands dilution: when N jumps, rates fall. On its own it underforecasts (players earn on a wide spread of schedules, not one lag) -- which is why it belongs in a mean with member 4.
-4. **The house curve baseline's own shape**, `logit(r)` linear in `ln(1+t)` over the last 24 hours, with no slope cap. On its own it overshoots -- its slope runs to 3 or 4 on story trophies -- which is why it belongs in a mean with member 3. Capping the slope was tried and made the ensemble much worse (the median's mean |logit error| went from 0.56 to 1.37), so the slope is left uncapped; the member's logit is only clamped to [-6, 6] as a safety net.
+Two holdout backtests, built from real histories, not invented worlds. Each takes the flat launch-night history (the kit's practice cases) and scores the forecast against the live 13:36Z snapshot of the same page (55 trophies each; horizons 636 and 606 minutes, ~10.5 h):
 
-The spread is a split normal on the logit scale. Its width combines the saturating-logistic fit's residuals, the disagreement between the four members (divided by 4, not 2 -- the members' errors cancel, so the disagreement overstates the mean's error), the uncertainty of the N extrapolation, a horizon term (0.25 logit sd per root-day), a staleness term, and -- only on the downside -- a refresh-mixture term: while the page is stale a refresh may or may not land before the target, and a refresh can only push rates down. When the history is flat and the horizon is short (the practice cases) that term dominates the lower tail, which is the honest shape: the median stays at the last rate, the 5% quantile reaches down toward the post-refresh level. The 100% trophy ("Just Like Paradise") gets a fixed row near 100%.
+| backtest | horizon | this entry | house persistence | house curve (practice) |
+|---|---|---|---|---|
+| L0 (from p00) | 10.6 h | **0.3192** | 2.3827 | ~1.51 |
+| L1 (from p01) | 10.1 h | **0.3384** | 2.3882 | ~1.51 |
+| mean | | **0.3288** | 2.3854 | ~1.51 |
 
-## Local validation
+Mean pinball loss on the logit scale (lower is better). The entry beats the house persistence baseline by 7.3× on real data. The kit's two practice cases have flat histories and no scoreable answer of their own, so they are not in this table — the backtests above are the validation, and they use the practice histories as their starting point.
 
-Practice cases, scored against the live Exophase page after its 04:30Z refresh (N = 3,868):
+Design choices were tested both ways on these backtests, and the losers were dropped:
 
-| case | this entry | starter baseline |
-|------|-----------|------------------|
-| p00  | 1.0697    | 1.5133           |
-| p01  | 1.0388    | 1.5133           |
+- A plain random-walk spread around persistence (σ = 0.5·√days) scores 2.3854 — the drop is not noise, it is a one-sided refresh.
+- A constant drop D = 1.802 (the launch-night jump) scores 0.8427; a linear D in the horizon scores 0.8237; the √H law scores 0.3265. The drop grows with the horizon, but slower than linearly.
+- Refresh interval τ = 3.0 h scores 0.3319, τ = 4.7 h scores 0.3265, τ = 8.0 h scores 0.4690 — the kit-measured ~4.7 h is best.
+- A per-trophy drop was rejected: the drop's correlation with the last rate is only −0.50, and the pattern is three outliers (the earliest trophies) against a tight cluster (2.4–3.2 logits for everything else). A global D is near-optimal; fitting per-trophy rules to three points would be overfitting.
 
-(The practice histories are flat -- one distinct read -- so every member falls back to the last rate and only the spread speaks; the gain comes from the asymmetric lower tail.)
+## What is NOT validated — read this before trusting the entry
 
-Final-like cases, scored on synthetic launch worlds (agent-based: players join on a growing curve, each with a log-normal pace, each trophy with a time-to-earn and an eventual share; the page frozen between Exophase refreshes; checkpoint at the entry deadline, target 4.5 days out):
+- **The rich-regime ensemble has never been backtested on real data.** No multi-refresh history exists before the deadline: a re-fetch of the live page ~30 minutes after the 13:36Z snapshot returned the same cached snapshot, so there is no third state to fit a trend on, let alone a fourth to score it against. The three members are principled (they mirror the house curve, a saturating asymptote, and the E/N mechanism) but unproven; the README says so because v1 claimed synthetic-world validation it did not have.
+- **The 4.5-day final horizon is a 10× extrapolation of the ~10 h backtest horizon.** The D(H) = jump·√(H/τ) law is a principled guess (refreshes accumulate like a random walk), not a measured law. If Exophase refreshes faster or slower than 4.7 h over the final window, the median will be off in that direction.
+- **The backtest covers only two cuts.** Both start from the same flat history and end at the same snapshot, so they are two windows on one event, not two independent events. The 0.33 number is the best real evidence available, not a guarantee.
 
-| model | mean pinball loss, 6 worlds | mean pinball loss, 9 worlds |
-|-------|----------------------------|-----------------------------|
-| this entry | **0.36** | **0.38** |
-| house curve baseline | 0.90 | -- |
-| persistence (last rate) | 1.15 | -- |
+## Determinism and runtime
 
-The entry's median misses the answer by 0.50 logits on average across the 9 worlds, against 1.55 for the house curve baseline and 1.80 for persistence. Runtime is about 0.5-1.3 s per case, well inside the 8 s limit.
+Standard library only, no network, no randomness. Two runs on the practice cases are byte-identical. Runtime ~0.05 s per case (limit 8 s). Edge cases stress-tested: single-read history, empty history, the 100% trophy (it is not special-cased — the general machinery lets it fall, as it did in reality: 100% → 99.99%), flat histories, big N jumps, and a 6,510-minute horizon.
 
 ## Run it
 
 ```sh
-MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
+python3 -P -s main.py   # reads /input/*.in, writes /output/*.out
 ```
 
-Reads every `*.in` in the input directory, writes `<id>.out` for each. No dependencies beyond Python 3.13's standard library.
-
-## Files
-
-- `main.py` -- the forecaster (the whole entry; see its header comment for the full method and the launch-night evidence behind the constants)
-- `README.md` -- this file
-- `LICENSE` -- MIT
-- `.makefun/owner.json` -- payout wallet for the bounty
+With `MAKEFUN_INPUT_DIR` / `MAKEFUN_OUTPUT_DIR` set, those directories are used instead. Output format: `{"trophies": [{"id": 1, "q": [q05, q25, q50, q75, q95]}, ...]}`, quantiles non-decreasing, each in [0, 100], rounded to 4 decimals (half up).
