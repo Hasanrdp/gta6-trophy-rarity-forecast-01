@@ -344,11 +344,20 @@ def forecast_case(case):
     rates_last = last_rates(case, n)
 
     if len(states) <= 2:
-        # Flat regime: persistence median + refresh mixture.
+        # Flat regime: persistence median + refresh mixture. The drop assumes
+        # earners stay fixed while players jump -- exactly wrong for a
+        # saturated trophy, whose earners grow with the player base: launch
+        # night "Just Like Paradise" stayed at 100% (actual drop 0.00 logits)
+        # while the rest fell ~2.6. So the drop is tapered to 0 as the last
+        # rate approaches 100% (factor 1 - r^50: ~1 below 95%, ~0 at 100%);
+        # the taper's middle is a principled guess, its endpoints are the
+        # observed drops.
         p, drop = refresh_params(states, horizon_hours)
         rows = []
         for i, tr in enumerate(trophies):
-            qs = mixture_quantiles(logit(rates_last[i]), base_sig, p, drop)
+            r = rates_last[i] / 100.0
+            qs = mixture_quantiles(logit(rates_last[i]), base_sig, p,
+                                   drop * (1.0 - r ** 50))
             rows.append({"id": tr["id"], "q": [round4(q) for q in qs]})
         return {"trophies": rows}
 
